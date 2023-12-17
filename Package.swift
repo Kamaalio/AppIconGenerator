@@ -11,16 +11,20 @@ let package = Package(
             name: "AppIconGenerator",
             targets: ["AppIconGenerator"]),
     ],
+    dependencies: [],
     targets: [
         .target(
             name: "AppIconGenerator",
+            dependencies: [],
             resources: [
                 .process("Internals/Resources")
             ]
         ),
         .testTarget(
             name: "AppIconGeneratorTests",
-            dependencies: ["AppIconGenerator"],
+            dependencies: [
+                "AppIconGenerator"
+            ],
             resources: [
                 .process("Resources")
             ]

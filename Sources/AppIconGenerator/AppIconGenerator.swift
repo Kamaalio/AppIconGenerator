@@ -19,40 +19,48 @@ public enum AppIconGenerator {
         let contents = getContentsJSON()
         let appIconDirectory = try makeAppIconDirectory(outputDirectory: outputDirectory)
         try addContentsToAppIconDirectory(appIconDirectory: appIconDirectory, contents: contents)
-        try await makeImages(contents: contents, image: image, appIconDirectory: appIconDirectory)
+        try await makeImages(contents: contents, image: image, destination: appIconDirectory)
         #endif
     }
 
     #if os(macOS)
-    private static func makeImages(contents: Contents, image: Image, appIconDirectory: URL) async throws {
+    private static func makeImages(contents: Contents, image: Image, destination: URL) async throws {
         let resizableImage = image.resizable()
-        var createdImages = [URL]()
-        for contentImage in contents.images {
-            guard let filename = contentImage.filename else { continue }
+        let imagesToCreateMap = contents.images
+            .reduce([URL: any View]()) { result, contentImage in
+                guard let filename = contentImage.filename else { return result }
 
-            let fileURL =  URL(filePath: appIconDirectory.appending(path: filename).absoluteString)
-            guard !createdImages.contains(fileURL) else { continue }
-            guard let size = Double(contentImage.size.split(separator: "x")[0]) else { continue }
-            guard let scale = Double(contentImage.scale.split(separator: "x")[0]) else { continue }
+                let fileURL =  URL(filePath: destination.appending(path: filename).absoluteString)
+                guard result[fileURL] == nil else { return result }
+                guard let size = Double(contentImage.size.split(separator: "x")[0]) else { return result }
+                guard let scale = Double(contentImage.scale.split(separator: "x")[0]) else { return result }
 
-            let scaledSize = size * scale
-            let scaledImage = resizableImage.frame(width: scaledSize, height: scaledSize)
-            let pngData = try await transformViewToPNG(view: scaledImage)
-            try pngData.write(to: fileURL)
-            createdImages.append(fileURL)
+                let scaledSize = size * scale
+                let scaledImage = resizableImage.frame(width: scaledSize, height: scaledSize)
+                var result = result
+                result[fileURL] = scaledImage
+                return result
+            }
+
+        try await withThrowingTaskGroup(of: (Data?, URL).self) { group in
+            for (imageURL, scaledImage) in imagesToCreateMap {
+                group.addTask { await (transformViewToPNG(view: scaledImage), imageURL) }
+            }
+
+            for try await (pngData, imageURL) in group {
+                guard let pngData else { throw AppIconGeneratorErrors.invalidImageProvided }
+
+                try pngData.write(to: imageURL)
+            }
         }
     }
 
     @MainActor
-    private static func transformViewToPNG(view: some View) throws -> Data {
-        guard let nsImage = ImageRenderer(content: view).nsImage
-        else { throw AppIconGeneratorErrors.invalidImageProvided }
-        guard let tiffRepresentation = nsImage.tiffRepresentation
-        else { throw AppIconGeneratorErrors.invalidImageProvided }
-        guard let imageRepresentation = NSBitmapImageRep(data: tiffRepresentation)
-        else { throw AppIconGeneratorErrors.invalidImageProvided }
-        guard let pngData = imageRepresentation.representation(using: .png, properties: [:])
-        else { throw AppIconGeneratorErrors.invalidImageProvided }
+    private static func transformViewToPNG(view: some View) -> Data? {
+        guard let nsImage = ImageRenderer(content: view).nsImage else { return nil }
+        guard let tiffRepresentation = nsImage.tiffRepresentation  else { return nil }
+        guard let imageRepresentation = NSBitmapImageRep(data: tiffRepresentation)  else { return nil }
+        guard let pngData = imageRepresentation.representation(using: .png, properties: [:])  else { return nil }
 
         return pngData
     }
@@ -81,6 +89,7 @@ public enum AppIconGenerator {
         let path = Bundle.module.path(forResource: "Contents", ofType: "json")!
         let url = URL(fileURLWithPath: path)
         let data = try! Data(contentsOf: url)
+
         return try! JSONDecoder().decode(Contents.self, from: data)
     }
     #endif
