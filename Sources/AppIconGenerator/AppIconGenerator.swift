@@ -7,82 +7,229 @@
 
 import SwiftUI
 
-enum AppIconGeneratorErrors: Error {
-    case invalidImageProvided
-}
-
 public enum AppIconGenerator {
-    public static func execute(outputDirectory: URL, image: Image) async throws {
-        #if !os(macOS)
-        fatalError("This method is only supported on macOS")
-        #else
+    public static func makeImages(to outputDirectory: URL, image: Image) async -> Result<AppIconSet, AppIconGeneratorErrors> {
         let contents = getContentsJSON()
-        let appIconDirectory = try makeAppIconDirectory(outputDirectory: outputDirectory)
-        try addContentsToAppIconDirectory(appIconDirectory: appIconDirectory, contents: contents)
-        try await makeImages(contents: contents, image: image, destination: appIconDirectory)
-        #endif
-    }
+        let appIconDirectoryResult = makeAppIconDirectory(outputDirectory: outputDirectory)
+        let appIconDirectory: URL
+        switch appIconDirectoryResult {
+        case .failure(let failure): return .failure(failure)
+        case .success(let success): appIconDirectory = success
+        }
+        let addContentsToAppIconDirectoryResult = addContentsToAppIconDirectory(
+            appIconDirectory: appIconDirectory,
+            contents: contents
+        )
+        switch addContentsToAppIconDirectoryResult {
+        case .failure(let failure): return .failure(failure)
+        case .success: break
+        }
 
-    #if os(macOS)
-    private static func makeImages(contents: Contents, image: Image, destination: URL) async throws {
-        let resizableImage = image.resizable()
-        let imagesToCreateMap = contents.images
-            .reduce([URL: any View]()) { result, contentImage in
-                guard let filename = contentImage.filename else { return result }
+        let appIconSetResult = await makeImages(contents: contents, image: image, outputDirectory: appIconDirectory)
+        let appIconSet: AppIconSet
+        switch appIconSetResult {
+        case .failure(let failure): return .failure(failure)
+        case .success(let success): appIconSet = success
+        }
 
-                let fileURL =  URL(filePath: destination.appending(path: filename).absoluteString)
-                guard result[fileURL] == nil else { return result }
-                guard let size = Double(contentImage.size.split(separator: "x")[0]) else { return result }
-                guard let scale = Double(contentImage.scale.split(separator: "x")[0]) else { return result }
-
-                let scaledSize = size * scale
-                let scaledImage = resizableImage.frame(width: scaledSize, height: scaledSize)
-                var result = result
-                result[fileURL] = scaledImage
-                return result
-            }
-
-        try await withThrowingTaskGroup(of: (Data?, URL).self) { group in
-            for (imageURL, scaledImage) in imagesToCreateMap {
-                group.addTask { await (transformViewToPNG(view: scaledImage), imageURL) }
-            }
-
-            for try await (pngData, imageURL) in group {
-                guard let pngData else { throw AppIconGeneratorErrors.invalidImageProvided }
-
-                try pngData.write(to: imageURL)
+        for appIconSetImage in appIconSet.images {
+            do {
+                try appIconSetImage.data.write(to: appIconSetImage.url!)
+            } catch {
+                return .failure(.writeToDestinationDirectoryFailure(context: error))
             }
         }
+
+        return .success(appIconSet)
+    }
+
+    public static func makeImages(image: Image) async -> Result<AppIconSet, AppIconGeneratorErrors> {
+        let contents = getContentsJSON()
+        return await makeImages(contents: contents, image: image, outputDirectory: nil)
+    }
+}
+
+public enum AppIconGeneratorErrors: Error {
+    case invalidImageProvided
+    case destinationDirectoryCleanupFailure(context: Error)
+    case destinationDirectoryCreationFailure(context: Error)
+    case writeToDestinationDirectoryFailure(context: Error)
+}
+
+public struct AppIconSet {
+    public let content: Contents
+    public let images: [AppIconSetImage]
+
+    public init(content: Contents, images: [AppIconSetImage]) {
+        self.content = content
+        self.images = images
+    }
+
+    public struct AppIconSetImage {
+        public let filename: String
+        public let data: Data
+        public let url: URL?
+
+        public init(filename: String, data: Data, url: URL?) {
+            self.filename = filename
+            self.data = data
+            self.url = url
+        }
+
+        public var image: Image? {
+            #if os(macOS)
+            guard let nsImage = NSImage(data: data) else { return nil }
+            return Image(nsImage: nsImage)
+            #else
+            guard let uiImage = UIImage(data: data) else { return nil }
+            return Image(uiImage: uiImage)
+            #endif
+        }
+    }
+}
+
+public struct Contents: Codable {
+    public let images: [ContentImage]
+    public let info: Info
+
+    public init(images: [ContentImage], info: Info) {
+        self.images = images
+        self.info = info
+    }
+
+    public struct ContentImage: Codable {
+        public let filename: String?
+        public let idiom: String
+        public let scale: String
+        public let size: String
+        public let subtype: String?
+        public let role: String?
+
+        public init(filename: String?, idiom: String, scale: String, size: String, subtype: String?, role: String?) {
+            self.filename = filename
+            self.idiom = idiom
+            self.scale = scale
+            self.size = size
+            self.subtype = subtype
+            self.role = role
+        }
+    }
+
+    public struct Info: Codable {
+        public let author: String
+        public let version: Int
+
+        public init(author: String, version: Int) {
+            self.author = author
+            self.version = version
+        }
+    }
+}
+
+extension AppIconGenerator {
+    private static let jsonEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        return encoder
+    }()
+
+    private static func makeImages(
+        contents: Contents,
+        image: Image,
+        outputDirectory: URL?
+    ) async -> Result<AppIconSet, AppIconGeneratorErrors> {
+        let imagesToCreateMappedByName = resizeImage(image, basedOn: contents)
+        return await withTaskGroup(
+            of: (Data?, String).self,
+            returning: Result<AppIconSet, AppIconGeneratorErrors>.self
+        ) { group in
+            for (filename, scaledImage) in imagesToCreateMappedByName {
+                group.addTask { await (transformViewToPNG(view: scaledImage), filename) }
+            }
+
+            var images = [AppIconSet.AppIconSetImage]()
+            for await (pngData, filename) in group {
+                guard let pngData else { return .failure(.invalidImageProvided) }
+
+                var url: URL?
+                if let outputDirectory {
+                    url =  URL(filePath: outputDirectory.appending(path: filename).absoluteString)
+                }
+                images.append(.init(filename: filename, data: pngData, url: url))
+            }
+            return .success(AppIconSet(content: contents, images: images))
+        }
+    }
+
+    private static func resizeImage(_ image: Image, basedOn contents: Contents) -> [String: any View] {
+        let resizableImage = image.resizable()
+        var imagesMappedByFilename = [String: any View]()
+        for contentImage in contents.images {
+            guard let filename = contentImage.filename else { continue }
+
+            guard imagesMappedByFilename[filename] == nil else { continue }
+            guard let size = Double(contentImage.size.split(separator: "x")[0]) else { continue }
+            guard let scale = Double(contentImage.scale.split(separator: "x")[0]) else { continue }
+
+            let scaledSize = size * scale
+            let scaledImage = resizableImage.frame(width: scaledSize, height: scaledSize)
+            imagesMappedByFilename[filename] = scaledImage
+        }
+
+        return imagesMappedByFilename
     }
 
     @MainActor
     private static func transformViewToPNG(view: some View) -> Data? {
-        guard let nsImage = ImageRenderer(content: view).nsImage else { return nil }
-        guard let tiffRepresentation = nsImage.tiffRepresentation  else { return nil }
-        guard let imageRepresentation = NSBitmapImageRep(data: tiffRepresentation)  else { return nil }
-        guard let pngData = imageRepresentation.representation(using: .png, properties: [:])  else { return nil }
+        #if os(iOS)
+        ImageRenderer(content: view)
+            .uiImage?
+            .pngData()
+        #else
+        guard let tiffRepresentation = ImageRenderer(content: view)
+            .nsImage?
+            .tiffRepresentation else { return nil }
 
-        return pngData
+        return NSBitmapImageRep(data: tiffRepresentation)?
+            .representation(using: .png, properties: [:])
+        #endif
     }
 
-    private static func addContentsToAppIconDirectory(appIconDirectory: URL, contents: Contents) throws {
+    private static func addContentsToAppIconDirectory(
+        appIconDirectory: URL,
+        contents: Contents
+    ) -> Result<Void, AppIconGeneratorErrors> {
         let contentsURL = appIconDirectory.appending(path: "Contents").appendingPathExtension("json")
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .prettyPrinted
-        try encoder.encode(contents).write(to: URL(filePath: contentsURL.absoluteString))
+        let contentsURLFileURL = URL(filePath: contentsURL.absoluteString)
+        do {
+            try jsonEncoder.encode(contents).write(to: contentsURLFileURL)
+        } catch {
+            return .failure(.writeToDestinationDirectoryFailure(context: error))
+        }
+
+        return .success(())
     }
 
-    private static func makeAppIconDirectory(outputDirectory: URL) throws -> URL {
+    private static func makeAppIconDirectory(outputDirectory: URL) -> Result<URL, AppIconGeneratorErrors> {
         let outputDirectory = outputDirectory.appending(path: "AppIcon.appiconset")
         let outputDirectoryPath = outputDirectory.absoluteString
         let fileManager = FileManager.default
         let directoryExists = fileManager.fileExists(atPath: outputDirectoryPath)
         if directoryExists {
-            try fileManager.removeItem(atPath: outputDirectoryPath)
+            do {
+                try fileManager.removeItem(atPath: outputDirectoryPath)
+            } catch {
+                return .failure(.destinationDirectoryCleanupFailure(context: error))
+            }
         }
-        try fileManager.createDirectory(atPath: outputDirectoryPath, withIntermediateDirectories: true)
 
-        return URL(string: outputDirectoryPath)!
+        do {
+            try fileManager.createDirectory(atPath: outputDirectoryPath, withIntermediateDirectories: true)
+        } catch {
+            return .failure(.destinationDirectoryCreationFailure(context: error))
+        }
+
+        return .success(URL(string: outputDirectoryPath)!)
     }
 
     private static func getContentsJSON() -> Contents {
@@ -92,5 +239,4 @@ public enum AppIconGenerator {
 
         return try! JSONDecoder().decode(Contents.self, from: data)
     }
-    #endif
 }
