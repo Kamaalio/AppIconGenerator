@@ -12,23 +12,58 @@ import SwiftUI
 final class AppIconGeneratorTests: XCTestCase {
     private let fileManager = FileManager.default
 
-    func testMakeImages() async throws {
+    func testMakeAppIconSet() async throws {
         let expectedAmountOfImages = 35
         let swiftUIImage = try getSwiftUIImage(named: "saitama", withExtension: "jpeg")
         #if os(macOS)
         let outputDirectory = try makeOutputDirectory()
 
-        try await AppIconGenerator.makeImages(to: outputDirectory, image: swiftUIImage).get()
+        let appIconSet = try await AppIconGenerator.makeAppIconSet(to: outputDirectory, outOf: swiftUIImage).get()
 
         let expectedAppIconDirectory = outputDirectory.appending(path: "AppIcon.appiconset")
         let contents = try fileManager.contentsOfDirectory(atPath: expectedAppIconDirectory.absoluteString)
         XCTAssertEqual(contents.count, expectedAmountOfImages + 1)
+        XCTAssertEqual(appIconSet.images.count, expectedAmountOfImages)
         #else
-        let appIconSet = try await AppIconGenerator.makeImages(image: swiftUIImage).get()
+        let appIconSet = try await AppIconGenerator.makeAppIconSet(outOf: swiftUIImage).get()
 
         XCTAssertEqual(appIconSet.images.count, expectedAmountOfImages)
         #endif
     }
+
+    #if os(macOS)
+    func testAppIconSetContents() async throws {
+        let swiftUIImage = try getSwiftUIImage(named: "yami", withExtension: "jpg")
+        let outputDirectory = try makeOutputDirectory()
+
+        let appIconSet = try await AppIconGenerator.makeAppIconSet(to: outputDirectory, outOf: swiftUIImage).get()
+
+        let contentsJSONURL = outputDirectory
+            .appending(path: "AppIcon.appiconset")
+            .appending(path: "Contents")
+            .appendingPathExtension("json")
+        let contentsJSONFileURL = URL(filePath: contentsJSONURL.absoluteString)
+        let contentsJSON = try Data(contentsOf: contentsJSONFileURL)
+        let contents = try JSONDecoder().decode(Contents.self, from: contentsJSON)
+
+        XCTAssertEqual(contents, appIconSet.content)
+    }
+
+    func testAppIconSetImages() async throws {
+        let expectedAmountOfImages = 35
+        let swiftUIImage = try getSwiftUIImage(named: "yami", withExtension: "jpg")
+        let outputDirectory = try makeOutputDirectory()
+
+        let appIconSet = try await AppIconGenerator.makeAppIconSet(to: outputDirectory, outOf: swiftUIImage).get()
+
+        let expectedAppIconDirectory = outputDirectory.appending(path: "AppIcon.appiconset")
+        let contents = try fileManager.contentsOfDirectory(atPath: expectedAppIconDirectory.absoluteString)
+            .filter({ name in name.contains(".png") })
+
+        XCTAssertEqual(contents.count, expectedAmountOfImages)
+        XCTAssertEqual(appIconSet.images.map(\.filename).sorted(), contents.sorted())
+    }
+    #endif
 
     #if os(macOS)
     private func makeOutputDirectory() throws -> URL {
