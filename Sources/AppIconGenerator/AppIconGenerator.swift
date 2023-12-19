@@ -38,6 +38,11 @@ public enum AppIconGenerator {
     public static func makeAppIconSet(outOf image: Image) async -> Result<AppIconSet, AppIconGeneratorErrors> {
         await makeAppIconSet(image: image, outputDirectory: nil)
     }
+
+    @MainActor
+    public static func transformImageToData(_ image: Image) -> Data? {
+        transformViewToPNG(view: image)
+    }
 }
 
 public enum AppIconGeneratorErrors: Error {
