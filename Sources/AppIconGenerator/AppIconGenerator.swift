@@ -41,11 +41,11 @@ public enum AppIconGenerator {
 
     @MainActor
     public static func transformImageToData(_ image: Image) -> Data? {
-        transformViewToPNG(view: image)
+        transformViewToPNG(image)
     }
 
     @MainActor
-    public static func transformViewToPNG(view: some View) -> Data? {
+    public static func transformViewToPNG(_ view: some View) -> Data? {
         #if os(iOS)
         ImageRenderer(content: view)
             .uiImage?
@@ -166,7 +166,7 @@ extension AppIconGenerator {
             returning: Result<AppIconSet, AppIconGeneratorErrors>.self
         ) { group in
             for (filename, scaledImage) in imagesToCreateMappedByName {
-                group.addTask { await (transformViewToPNG(view: scaledImage), filename) }
+                group.addTask { await (transformViewToPNG(scaledImage), filename) }
             }
 
             var images = [AppIconSet.AppIconSetImage]()
