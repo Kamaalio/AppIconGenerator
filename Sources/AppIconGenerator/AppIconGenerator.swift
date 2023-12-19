@@ -43,6 +43,22 @@ public enum AppIconGenerator {
     public static func transformImageToData(_ image: Image) -> Data? {
         transformViewToPNG(view: image)
     }
+
+    @MainActor
+    public static func transformViewToPNG(view: some View) -> Data? {
+        #if os(iOS)
+        ImageRenderer(content: view)
+            .uiImage?
+            .pngData()
+        #else
+        guard let tiffRepresentation = ImageRenderer(content: view)
+            .nsImage?
+            .tiffRepresentation else { return nil }
+
+        return NSBitmapImageRep(data: tiffRepresentation)?
+            .representation(using: .png, properties: [:])
+        #endif
+    }
 }
 
 public enum AppIconGeneratorErrors: Error {
@@ -183,22 +199,6 @@ extension AppIconGenerator {
         }
 
         return imagesMappedByFilename
-    }
-
-    @MainActor
-    private static func transformViewToPNG(view: some View) -> Data? {
-        #if os(iOS)
-        ImageRenderer(content: view)
-            .uiImage?
-            .pngData()
-        #else
-        guard let tiffRepresentation = ImageRenderer(content: view)
-            .nsImage?
-            .tiffRepresentation else { return nil }
-
-        return NSBitmapImageRep(data: tiffRepresentation)?
-            .representation(using: .png, properties: [:])
-        #endif
     }
 
     private static func addContentsToAppIconDirectory(
