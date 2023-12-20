@@ -10,8 +10,10 @@ import SwiftUI
 public enum AppIconGenerator {
     public static func makeAppIconSet(
         to outputDirectory: URL,
-        outOf image: Image
+        outOf view: some View
     ) async -> Result<AppIconSet, AppIconGeneratorErrors> {
+        guard let image = await viewToImage(view) else { return .failure(.invalidImageProvided) }
+
         let appIconSetResult = await makeAppIconSet(image: image, outputDirectory: outputDirectory)
         let appIconSet: AppIconSet
         switch appIconSetResult {
@@ -35,13 +37,10 @@ public enum AppIconGenerator {
         return .success(appIconSet)
     }
 
-    public static func makeAppIconSet(outOf image: Image) async -> Result<AppIconSet, AppIconGeneratorErrors> {
-        await makeAppIconSet(image: image, outputDirectory: nil)
-    }
+    public static func makeAppIconSet(outOf view: some View) async -> Result<AppIconSet, AppIconGeneratorErrors> {
+        guard let image = await viewToImage(view) else { return .failure(.invalidImageProvided) }
 
-    @MainActor
-    public static func transformImageToData(_ image: Image) -> Data? {
-        transformViewToPNG(image)
+        return await makeAppIconSet(image: image, outputDirectory: nil)
     }
 
     @MainActor
@@ -144,6 +143,19 @@ extension AppIconGenerator {
         encoder.outputFormatting = .prettyPrinted
         return encoder
     }()
+
+    @MainActor
+    private static func viewToImage(_ view: some View) -> Image? {
+        #if os(iOS)
+        guard let uiImage = ImageRenderer(content: view).uiImage else { return nil }
+
+        return Image(uiImage: uiImage)
+        #else
+        guard let nsImage = ImageRenderer(content: view).nsImage else { return nil }
+
+        return Image(nsImage: nsImage)
+        #endif
+    }
 
     private static func makeAppIconSet(
         image: Image,
