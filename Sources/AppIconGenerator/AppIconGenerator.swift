@@ -70,10 +70,12 @@ public enum AppIconGeneratorErrors: Error {
 public struct AppIconSet: Codable, Hashable {
     public let content: Contents
     public let images: [AppIconSetImage]
+    public let url: URL?
 
-    public init(content: Contents, images: [AppIconSetImage]) {
+    public init(content: Contents, images: [AppIconSetImage], url: URL?) {
         self.content = content
         self.images = images
+        self.url = url
     }
 
     public struct AppIconSetImage: Codable, Hashable {
@@ -191,7 +193,7 @@ extension AppIconGenerator {
                 }
                 images.append(.init(filename: filename, data: pngData, url: url))
             }
-            return .success(AppIconSet(content: contents, images: images))
+            return .success(AppIconSet(content: contents, images: images, url: appIconDirectory))
         }
     }
 

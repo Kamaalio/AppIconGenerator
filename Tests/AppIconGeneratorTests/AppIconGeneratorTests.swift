@@ -32,6 +32,15 @@ final class AppIconGeneratorTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testAppIconSetURL() async throws {
+        let swiftUIImage = try getSwiftUIImage(named: "saitama", withExtension: "jpeg")
+        let outputDirectory = try makeOutputDirectory()
+
+        let appIconSet = try await AppIconGenerator.makeAppIconSet(to: outputDirectory, outOf: swiftUIImage).get()
+
+        XCTAssertEqual(appIconSet.url, outputDirectory.appending(path: "AppIcon.appiconset"))
+    }
+
     func testAppIconSetContents() async throws {
         let swiftUIImage = try getSwiftUIImage(named: "yami", withExtension: "jpg")
         let outputDirectory = try makeOutputDirectory()
